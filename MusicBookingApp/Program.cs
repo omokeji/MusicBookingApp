@@ -198,7 +198,7 @@ app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext) =>
 })
 .WithName("Signup")
 .WithTags("Auth")
-.Produces<ApplicationUser>(StatusCodes.Status201Created)
+.Produces<Result<SignUpResponseDto>>(StatusCodes.Status201Created)
 .Produces(StatusCodes.Status400BadRequest);
 
 // Login Endpoint
@@ -224,7 +224,7 @@ app.MapPost("/api/auth/login", async (LoginDto dto, AppDbContext db) =>
 })
 .WithName("Login")
 .WithTags("Auth")
-.Produces<AuthResponseDto>(StatusCodes.Status200OK)
+.Produces<Result<AuthResponseDto>>(StatusCodes.Status200OK)
 .Produces(StatusCodes.Status401Unauthorized);
 
 // Artist Endpoints
