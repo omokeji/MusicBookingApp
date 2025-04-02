@@ -183,6 +183,9 @@ app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext) =>
     var user = new ApplicationUser
     {
         Email = dto.Email,
+        FirstName = dto.FirstName,
+        LastName = dto.LastName,
+        PhoneNumber = dto.PhoneNumber,
         PasswordHash = HashPassword(dto.Password)
     };
 
@@ -191,7 +194,8 @@ app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext) =>
 
     return Results.Created($"/api/auth/signup/{user.Id}", new Result<SignUpResponseDto>
     {
-        ResponseDescription = ResponseCodes.Success,
+        ResponseDescription = "Signup successful",
+        ResponseCode = ResponseCodes.Success,
         IsSuccess = true,
         Content = new SignUpResponseDto { Email = user.Email, UserId = user.Id }
     });
@@ -217,7 +221,8 @@ app.MapPost("/api/auth/login", async (LoginDto dto, AppDbContext db) =>
 
     return Results.Ok(new Result<AuthResponseDto>
     {
-        ResponseDescription = ResponseCodes.Success,
+        ResponseDescription = "Login Successful",
+        ResponseCode = ResponseCodes.Success,
         IsSuccess = true,
         Content = new AuthResponseDto { Token = token }
     });
