@@ -184,6 +184,7 @@ app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext) =>
     {
         Email = dto.Email,
         FirstName = dto.FirstName,
+        MiddleName = dto.MiddleName,
         LastName = dto.LastName,
         PhoneNumber = dto.PhoneNumber,
         PasswordHash = HashPassword(dto.Password)
@@ -246,7 +247,7 @@ app.MapGet("/api/artists", async (AppDbContext dbContext) => {
     })
    .WithName("GetArtists")
    .WithTags("Artists")
-   .RequireAuthorization()
+   //.RequireAuthorization()
    .Produces<Result<List<Artist>>>();
 
 app.MapGet("/api/artists/{id}", async (int id, AppDbContext dbContext) =>
@@ -325,7 +326,7 @@ app.MapGet("/api/events", async (AppDbContext dbContext) =>
     })
    .WithName("GetEvents")
    .WithTags("Events")
-   .RequireAuthorization()
+   //.RequireAuthorization()
    .Produces<Result<List<Event>>>(StatusCodes.Status200OK);
 
 app.MapPost("/api/events", async (EventCreateDto request, AppDbContext dbContext) =>
@@ -419,7 +420,7 @@ app.MapGet("/api/bookings/{userId}", async (int userId, AppDbContext dbContext) 
     })
    .WithName("GetBookingsByUser")
    .WithTags("Bookings")
-   .RequireAuthorization()
+   //.RequireAuthorization()
    .Produces<Result<List<Booking>>>(StatusCodes.Status200OK);
 
 app.Run();
