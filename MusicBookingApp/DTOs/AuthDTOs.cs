@@ -21,5 +21,11 @@ public class AuthDTOs
     public class AuthResponseDto
     {
         public string Token { get; set; } = string.Empty;
+    }    
+    
+    public class SignUpResponseDto
+    {
+        public string UserId { get; set; } = string.Empty;
+        public string Email { get; set; } = string.Empty;
     }
 }

@@ -1,6 +1,4 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -16,7 +14,6 @@ using System.Threading.RateLimiting;
 using static MusicBookingApp.DTOs.ArtistDTOs;
 using static MusicBookingApp.DTOs.EventDTOs;
 using static MusicBookingApp.DTOs.AuthDTOs;
-using MusicBookingApp.Helpers;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 
@@ -24,20 +21,6 @@ var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
 // Add services to the container.
-
-//builder.Services
-//           .AddEndpointsApiExplorer()
-//           .AddSwaggerGen(options =>
-//           {
-//               options.SwaggerDoc("v1", new OpenApiInfo
-//               {
-//                   Title = "MusicBookingApp API",
-//                   Version = "v1",
-//                   Description = "An API for MusicBookingApp"
-//               });
-//           })
-//           .AddAuthorization()
-//           .AddAuthentication();
 
 builder.Services.AddSwaggerGen(c =>
 {
@@ -59,6 +42,7 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+builder.Services.AddAuthorization();
 builder.Services.AddHealthChecks();
 
 string jwtKey = builder.Configuration["Jwt:Key"]!;
@@ -113,28 +97,28 @@ builder.Services.AddEndpointsApiExplorer();
 var app = builder.Build();
 
 // Error Handling Middleware
-app.UseExceptionHandler(errorApp =>
-{
-    errorApp.Run(async context =>
+    app.UseExceptionHandler(errorApp =>
     {
-        var exception = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
-if (exception != null)
-{
-    var error = exception.Error;
-    var statusCode = error switch
+        errorApp.Run(async context =>
+        {
+            var exception = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+    if (exception != null)
     {
-        ArgumentException => (int)HttpStatusCode.BadRequest,
-        UnauthorizedAccessException => (int)HttpStatusCode.Unauthorized,
-        KeyNotFoundException => (int)HttpStatusCode.NotFound,
-        _ => (int)HttpStatusCode.InternalServerError
-    };
-    context.Response.StatusCode = statusCode;
-    context.Response.ContentType = "application/json";
-    var response = new { StatusCode = statusCode, Message = error.Message, Detailed = app.Environment.IsDevelopment() ? error.StackTrace : null };
-    await context.Response.WriteAsJsonAsync(response);
-}
+        var error = exception.Error;
+        var statusCode = error switch
+        {
+            ArgumentException => (int)HttpStatusCode.BadRequest,
+            UnauthorizedAccessException => (int)HttpStatusCode.Unauthorized,
+            KeyNotFoundException => (int)HttpStatusCode.NotFound,
+            _ => (int)HttpStatusCode.InternalServerError
+        };
+        context.Response.StatusCode = statusCode;
+        context.Response.ContentType = "application/json";
+        var response = new { StatusCode = statusCode, Message = error.Message, Detailed = app.Environment.IsDevelopment() ? error.StackTrace : null };
+        await context.Response.WriteAsJsonAsync(response);
+    }
+        });
     });
-});
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -146,8 +130,8 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseAuthorization();
 app.UseAuthentication();
+app.UseAuthorization();
 
 static string HashPassword(string password)
 {
@@ -178,13 +162,23 @@ string GenerateJwtToken(ApplicationUser user, string key, string issuer, string 
     return new JwtSecurityTokenHandler().WriteToken(token);
 }
 
-app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext, AuthHelper helper) =>
+app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext) =>
 {
     if (string.IsNullOrEmpty(dto.Email) || string.IsNullOrEmpty(dto.Password))
-        throw new ArgumentException("Email and password are required.");
+        return Results.BadRequest(new Result<SignUpResponseDto>
+        {
+            ResponseDescription = "Email and password are required.",
+            ResponseCode = ResponseCodes.Error,
+            IsSuccess = false,
+        });
 
     if (await dbContext.Users.AnyAsync(u => u.Email == dto.Email))
-        throw new ArgumentException("Email already exists.");
+        return Results.BadRequest(new Result<SignUpResponseDto>
+        {
+            ResponseDescription = "Email already exists.",
+            ResponseCode = ResponseCodes.Error,
+            IsSuccess = false,
+        });
 
     var user = new ApplicationUser
     {
@@ -195,7 +189,12 @@ app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext, Au
     dbContext.Users.Add(user);
     await dbContext.SaveChangesAsync();
 
-    return Results.Created($"/api/auth/signup/{user.Id}", new { user.Id, user.Email });
+    return Results.Created($"/api/auth/signup/{user.Id}", new Result<SignUpResponseDto>
+    {
+        ResponseDescription = ResponseCodes.Success,
+        IsSuccess = true,
+        Content = new SignUpResponseDto { Email = user.Email, UserId = user.Id }
+    });
 })
 .WithName("Signup")
 .WithTags("Auth")
@@ -207,10 +206,21 @@ app.MapPost("/api/auth/login", async (LoginDto dto, AppDbContext db) =>
 {
     var user = await db.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
     if (user == null || user.PasswordHash != HashPassword(dto.Password))
-        throw new UnauthorizedAccessException("Invalid email or password.");
+        return Results.BadRequest(new Result<AuthResponseDto>
+        {
+            ResponseDescription = "Invalid email or password.",
+            ResponseCode = ResponseCodes.Error,
+            IsSuccess = false,
+        });
 
     var token = GenerateJwtToken(user, jwtKey, jwtIssuer, jwtAudience);
-    return Results.Ok(new AuthResponseDto { Token = token });
+
+    return Results.Ok(new Result<AuthResponseDto>
+    {
+        ResponseDescription = ResponseCodes.Success,
+        IsSuccess = true,
+        Content = new AuthResponseDto { Token = token }
+    });
 })
 .WithName("Login")
 .WithTags("Auth")
@@ -231,7 +241,7 @@ app.MapGet("/api/artists", async (AppDbContext dbContext) => {
     })
    .WithName("GetArtists")
    .WithTags("Artists")
-   //.RequireAuthorization()
+   .RequireAuthorization()
    .Produces<Result<List<Artist>>>();
 
 app.MapGet("/api/artists/{id}", async (int id, AppDbContext dbContext) =>
@@ -256,7 +266,7 @@ app.MapGet("/api/artists/{id}", async (int id, AppDbContext dbContext) =>
    })
    .WithName("GetArtistById")
    .WithTags("Artists")
-   //.RequireAuthorization()
+   .RequireAuthorization()
    .Produces<Result<Artist>>(StatusCodes.Status200OK)
    .Produces(StatusCodes.Status404NotFound);
 
@@ -291,7 +301,7 @@ app.MapGet("/api/artists/{id}", async (int id, AppDbContext dbContext) =>
     })
    .WithName("CreateArtist")
    .WithTags("Artists")
-   //.RequireAuthorization()
+   .RequireAuthorization()
    .Produces<Result<Artist>>(StatusCodes.Status201Created)
    .Produces(StatusCodes.Status400BadRequest);
 
