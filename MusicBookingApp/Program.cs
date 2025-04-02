@@ -9,32 +9,61 @@ using MusicBookingApp.Data;
 using MusicBookingApp.DTOs;
 using MusicBookingApp.Models;
 using Npgsql;
+using System.Net;
+using System;
 using System.Text;
 using System.Threading.RateLimiting;
 using static MusicBookingApp.DTOs.ArtistDTOs;
 using static MusicBookingApp.DTOs.EventDTOs;
+using static MusicBookingApp.DTOs.AuthDTOs;
+using MusicBookingApp.Helpers;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Cryptography;
 
 var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
 // Add services to the container.
 
-builder.Services
-           .AddEndpointsApiExplorer()
-           .AddSwaggerGen(options =>
-           {
-               options.SwaggerDoc("v1", new OpenApiInfo
-               {
-                   Title = "MusicBookingApp API",
-                   Version = "v1",
-                   Description = "An API for MusicBookingApp"
-               });
-           })
-           .AddAuthorization()
-           .AddAuthentication();
+//builder.Services
+//           .AddEndpointsApiExplorer()
+//           .AddSwaggerGen(options =>
+//           {
+//               options.SwaggerDoc("v1", new OpenApiInfo
+//               {
+//                   Title = "MusicBookingApp API",
+//                   Version = "v1",
+//                   Description = "An API for MusicBookingApp"
+//               });
+//           })
+//           .AddAuthorization()
+//           .AddAuthentication();
+
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Music Booking API", Version = "v1" });
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        In = ParameterLocation.Header,
+        Description = "Please enter JWT with Bearer into field",
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" } },
+            new string[] {}
+        }
+    });
+});
 
 builder.Services.AddHealthChecks();
 
+string jwtKey = builder.Configuration["Jwt:Key"]!;
+string jwtIssuer = builder.Configuration["Jwt:Issuer"]!;
+string jwtAudience = builder.Configuration["Jwt:Audience"]!;
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -45,10 +74,10 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidAudience = builder.Configuration["Jwt:Audience"],
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
             IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
+                Encoding.UTF8.GetBytes(jwtKey))
         };
     });
 
@@ -83,6 +112,30 @@ builder.Services.AddEndpointsApiExplorer();
 
 var app = builder.Build();
 
+// Error Handling Middleware
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var exception = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+if (exception != null)
+{
+    var error = exception.Error;
+    var statusCode = error switch
+    {
+        ArgumentException => (int)HttpStatusCode.BadRequest,
+        UnauthorizedAccessException => (int)HttpStatusCode.Unauthorized,
+        KeyNotFoundException => (int)HttpStatusCode.NotFound,
+        _ => (int)HttpStatusCode.InternalServerError
+    };
+    context.Response.StatusCode = statusCode;
+    context.Response.ContentType = "application/json";
+    var response = new { StatusCode = statusCode, Message = error.Message, Detailed = app.Environment.IsDevelopment() ? error.StackTrace : null };
+    await context.Response.WriteAsJsonAsync(response);
+}
+    });
+});
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -96,8 +149,76 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 app.UseAuthentication();
 
+static string HashPassword(string password)
+{
+    using var sha256 = SHA256.Create();
+    var hashedBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
+    return Convert.ToBase64String(hashedBytes);
+}
+
+// Helper method to generate JWT token
+string GenerateJwtToken(ApplicationUser user, string key, string issuer, string audience)
+{
+    var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key));
+    var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
+
+    var claims = new[]
+    {
+        new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.NameIdentifier, user.Id.ToString()),
+        new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Email, user.Email)
+    };
+
+    var token = new JwtSecurityToken(
+        issuer: issuer,
+        audience: audience,
+        claims: claims,
+        expires: DateTime.Now.AddHours(1),
+        signingCredentials: credentials);
+
+    return new JwtSecurityTokenHandler().WriteToken(token);
+}
+
+app.MapPost("/api/auth/signup", async (SignupDto dto, AppDbContext dbContext, AuthHelper helper) =>
+{
+    if (string.IsNullOrEmpty(dto.Email) || string.IsNullOrEmpty(dto.Password))
+        throw new ArgumentException("Email and password are required.");
+
+    if (await dbContext.Users.AnyAsync(u => u.Email == dto.Email))
+        throw new ArgumentException("Email already exists.");
+
+    var user = new ApplicationUser
+    {
+        Email = dto.Email,
+        PasswordHash = HashPassword(dto.Password)
+    };
+
+    dbContext.Users.Add(user);
+    await dbContext.SaveChangesAsync();
+
+    return Results.Created($"/api/auth/signup/{user.Id}", new { user.Id, user.Email });
+})
+.WithName("Signup")
+.WithTags("Auth")
+.Produces<ApplicationUser>(StatusCodes.Status201Created)
+.Produces(StatusCodes.Status400BadRequest);
+
+// Login Endpoint
+app.MapPost("/api/auth/login", async (LoginDto dto, AppDbContext db) =>
+{
+    var user = await db.Users.FirstOrDefaultAsync(u => u.Email == dto.Email);
+    if (user == null || user.PasswordHash != HashPassword(dto.Password))
+        throw new UnauthorizedAccessException("Invalid email or password.");
+
+    var token = GenerateJwtToken(user, jwtKey, jwtIssuer, jwtAudience);
+    return Results.Ok(new AuthResponseDto { Token = token });
+})
+.WithName("Login")
+.WithTags("Auth")
+.Produces<AuthResponseDto>(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status401Unauthorized);
+
 // Artist Endpoints
-    app.MapGet("/api/artists", async (AppDbContext dbContext) => {
+app.MapGet("/api/artists", async (AppDbContext dbContext) => {
         var artists = await dbContext.Artists.ToListAsync();
         var response = new Result<List<Artist>>
         {
